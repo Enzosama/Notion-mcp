@@ -142,8 +142,11 @@ class MarkdownConverter:
     
     @staticmethod
     def latex_to_notion(expr: str) -> str:
-        pattern = r"\\\[(.*?)\\\]"
-        converted = re.sub(pattern, r"[\1]", expr, flags=re.DOTALL)
+        expr = re.sub(r"\\```math([\s\S]*?)\\```", r"\1", expr)
+        expr = re.sub(r"\\begin\{eqnarray\*?\}", r"\\begin{aligned}", expr)
+        expr = re.sub(r"\\end\{eqnarray\*?\}", r"\\end{aligned}", expr)
+        converted = expr.strip()
+
         return converted
 
     def markdown_latex_to_notion_blocks(self, content: str) -> List[Dict[str, Any]]:

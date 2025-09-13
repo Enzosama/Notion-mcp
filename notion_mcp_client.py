@@ -406,15 +406,6 @@ class NotionMCPCLI:
                 mode=mode or "edit"
             )
             print(f"\nPage updated:\n{result}")
-
-        if page_id:
-            result = await self.client.update_page(
-                page_id, 
-                title=title, 
-                content=content, 
-                mode=mode or "edit"
-            )
-            print(f"\nPage updated:\n{result}")
     
     async def _query_database(self):
         """Query a database"""
