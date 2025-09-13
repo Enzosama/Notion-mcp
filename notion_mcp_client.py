@@ -10,14 +10,11 @@ from typing import Any, Dict, List, Optional
 from contextlib import asynccontextmanager
 from mcp.server import NotificationOptions
 from mcp.server.models import InitializationOptions
+from mcp import ClientSession, StdioServerParameters
+from markdown_converter import MarkdownConverter
+from mcp.client.stdio import stdio_client
 from dotenv import load_dotenv
 load_dotenv()
-
-try:
-    from mcp import ClientSession, StdioServerParameters
-    from mcp.client.stdio import stdio_client
-except ImportError:
-    raise ImportError("Please install MCP: pip install mcp")
 
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 NOTION_HEADERS = {
@@ -203,15 +200,58 @@ class NotionMCPClient:
         self, 
         page_id: str, 
         title: Optional[str] = None,
-        properties: Optional[Dict] = None
+        properties: Optional[Dict] = None,
+        content: Optional[str] = None,
+        mode: str = "edit"  
     ) -> str:
-        """Update an existing page in Notion"""
+        """Update an existing page in Notion. Supports editing metadata and content."""
+        
         arguments = {"page_id": page_id}
         if title:
             arguments["title"] = title
         if properties:
             arguments["properties"] = properties
-        return await self.call_tool("update_page", arguments)
+        
+        if title or properties:
+            await self.call_tool("update_page", arguments)
+
+        if content:
+            converter = MarkdownConverter()
+            blocks = converter.markdown_latex_to_notion_blocks(content)
+
+            if mode == "edit":
+                existing_blocks_resp = await self.client.get(
+                    f"https://api.notion.com/v1/blocks/{page_id}/children?page_size=100"
+                )
+                existing_blocks_resp.raise_for_status()
+                existing_blocks = existing_blocks_resp.json().get("results", [])
+
+                # 2. Delete all
+                for blk in existing_blocks:
+                    blk_id = blk["id"]
+                    try:
+                        del_resp = await self.client.delete(f"https://api.notion.com/v1/blocks/{blk_id}")
+                        del_resp.raise_for_status()
+                    except Exception as e:
+                        logger.warning(f"Couldn't delete block {blk_id}: {e}")
+
+                # 3. Append block 
+                append_resp = await self.client.patch(
+                    f"https://api.notion.com/v1/blocks/{page_id}/children",
+                    json={"children": blocks}
+                )
+                append_resp.raise_for_status()
+                return f"Page {page_id} content replaced ({len(blocks)} blocks)."
+            
+            elif mode == "add":
+                append_resp = await self.client.patch(
+                    f"https://api.notion.com/v1/blocks/{page_id}/children",
+                    json={"children": blocks}
+                )
+                append_resp.raise_for_status()
+                return f"Page {page_id} appended with {len(blocks)} new blocks."
+
+        return f"Page {page_id} updated (metadata only)."
     
     async def query_database(
         self,
@@ -343,12 +383,37 @@ class NotionMCPCLI:
             print(f"\nPage created:\n{result}")
     
     async def _update_page(self):
-        """Update an existing page"""
         page_id = input("Enter page ID: ").strip()
         title = input("Enter new title (optional): ").strip() or None
-        
+        mode = input("Mode (edit/add, leave empty for metadata only): ").strip().lower()
+
+        content = None
+        if mode in ("edit", "add"):
+            print("Enter Markdown content (finish with a line containing only END):")
+            lines = []
+            while True:
+                line = input()
+                if line.strip().upper() == "END":
+                    break
+                lines.append(line)
+            content = "\n".join(lines)
+
         if page_id:
-            result = await self.client.update_page(page_id, title=title)
+            result = await self.client.update_page(
+                page_id,
+                title=title,
+                content=content,
+                mode=mode or "edit"
+            )
+            print(f"\nPage updated:\n{result}")
+
+        if page_id:
+            result = await self.client.update_page(
+                page_id, 
+                title=title, 
+                content=content, 
+                mode=mode or "edit"
+            )
             print(f"\nPage updated:\n{result}")
     
     async def _query_database(self):
@@ -373,7 +438,6 @@ async def main():
     parser.add_argument("--server", default="notion_mcp_server.py", help="Path to server script")
     parser.add_argument("--token", help="Notion integration token (or set NOTION_TOKEN env var)")
     parser.add_argument("--interactive", "-i", action="store_true", help="Run in interactive mode")
-    
     # Example commands
     parser.add_argument("--search", help="Search query")
     parser.add_argument("--list-resources", action="store_true", help="List all resources")

@@ -1,9 +1,3 @@
-#!/usr/bin/env python3
-"""
-Notion MCP Server - Server Implementation
-A Model Context Protocol server that provides access to Notion APIs
-"""
-
 import asyncio
 import json
 import logging
@@ -13,29 +7,21 @@ import os
 from datetime import datetime
 from mcp.server.models import InitializationOptions
 from mcp.server import NotificationOptions
-
+from notion_client import Client
+from notion_client.errors import APIResponseError
 from dotenv import load_dotenv
 load_dotenv()
 
 
-try:
-    from notion_client import Client
-    from notion_client.errors import APIResponseError
-except ImportError:
-    raise ImportError("Please install notion-client: pip install notion-client")
-
-try:
-    from mcp.server import Server
-    from mcp.server.models import InitializationOptions
-    from mcp.types import (
+from mcp.server import Server
+from mcp.server.models import InitializationOptions
+from mcp.types import (
         Resource,
         Tool,
         TextContent,
         ImageContent,
         EmbeddedResource,
     )
-except ImportError:
-    raise ImportError("Please install MCP: pip install mcp")
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -45,10 +31,8 @@ class NotionMCPServer:
     def __init__(self):
         # Initialize the MCP server
         self.server = Server("notion-mcp-server")
-        
         # Initialize Notion client (will be set up after receiving token)
         self.notion_client: Optional[Client] = None
-        
         # Setup server handlers
         self._setup_handlers()
         
@@ -60,7 +44,6 @@ class NotionMCPServer:
             """List available Notion resources"""
             if not self.notion_client:
                 return []
-                
             resources = []
             
             try:
@@ -91,8 +74,7 @@ class NotionMCPServer:
                         name=f"Page: {title}",
                         description=f"Notion page with ID: {page['id']}",
                         mimeType="text/plain"
-                    ))
-                    
+                    ))                    
             except Exception as e:
                 logger.error(f"Error listing resources: {e}")
                 
@@ -132,12 +114,9 @@ class NotionMCPServer:
                     
                     # Extract text content from blocks
                     content = self._extract_text_from_blocks(blocks.get("results", []))
-                    
                     return f"Page Content:\n{content}\n\nPage Metadata:\n{json.dumps(page, indent=2)}"
-                    
                 else:
                     raise ValueError(f"Unknown resource type: {resource_type}")
-                    
             except APIResponseError as e:
                 raise ValueError(f"Notion API error: {e}")
             except Exception as e:
@@ -459,7 +438,6 @@ async def main():
     
     # Run the server
     from mcp.server.stdio import stdio_server
-    
     async with stdio_server() as (read_stream, write_stream):
         await server_instance.server.run(
             read_stream,
@@ -476,6 +454,5 @@ async def main():
                 )
             )
         )
-
 if __name__ == "__main__":
     asyncio.run(main())

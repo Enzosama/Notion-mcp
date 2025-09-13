@@ -1,5 +1,6 @@
-from typing import List, Dict, Any
+import re
 import mistune
+from typing import List, Dict, Any
 
 class MarkdownConverter:
     def __init__(self):
@@ -23,7 +24,6 @@ class MarkdownConverter:
         i = content_start_idx
         while i < len(lines):
             line = lines[i]
-
             # H2-H6
             if line.startswith("## "):
                 blocks.append(
@@ -62,7 +62,6 @@ class MarkdownConverter:
                 while i < len(lines) and not lines[i].startswith("```"):
                     code_lines.append(lines[i])
                     i += 1
-
                 blocks.append(
                     {
                         "type": "code",
@@ -76,14 +75,11 @@ class MarkdownConverter:
                 blocks.append(
                     {"type": "paragraph", "paragraph": {"rich_text": [{"type": "text", "text": {"content": line.strip()}}]}}
                 )
-
             i += 1
-
         return blocks, title
 
     def convert_blocks_to_markdown(self, blocks: List[Dict[str, Any]], title: str = None) -> str:
         md_lines = []
-
         if title:
             md_lines.append(f"# {title}")
             md_lines.append("")  
@@ -143,8 +139,86 @@ class MarkdownConverter:
                 md_lines.append("")
 
         return "\n".join(md_lines)
+    
+    @staticmethod
+    def latex_to_notion(expr: str) -> str:
+        pattern = r"\\\[(.*?)\\\]"
+        converted = re.sub(pattern, r"[\1]", expr, flags=re.DOTALL)
+        return converted
+
+    def markdown_latex_to_notion_blocks(self, content: str) -> List[Dict[str, Any]]:
+        blocks: List[Dict[str, Any]] = []
+        block_pattern = re.compile(r"```math(.*?)```", re.DOTALL)
+        display_pattern = re.compile(r"\\```math(.*?)\\```", re.DOTALL)
+        inline_pattern = re.compile(r"\$(.+?)\$")
+        pos = 0
+        for m in re.finditer(r"```math.*?```|\\```math.*?\\```", content, re.DOTALL):
+            # Text before block
+            if m.start() > pos:
+                text_chunk = content[pos:m.start()]
+                blocks.extend(self._process_inline_lines(text_chunk, inline_pattern))
+            
+            expr = m.group(0)
+            expr_clean = (block_pattern.match(expr) or display_pattern.match(expr)).group(1).strip()
+            expr_clean = MarkdownConverter.latex_to_notion(expr_clean)
+            blocks.append({
+                "object": "block",
+                "type": "equation",
+                "equation": {"expression": expr_clean}
+            })
+            pos = m.end()
+
+        # --- Handle the remainder after last math block ---
+        if pos < len(content):
+            text_chunk = content[pos:]
+            blocks.extend(self._process_inline_lines(text_chunk, inline_pattern))
+
+        return blocks
+
+    def _process_inline_lines(self, text: str, inline_pattern) -> List[Dict[str, Any]]:
+        blocks = []
+        for line in text.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+
+            parts = []
+            last_idx = 0
+            for m in inline_pattern.finditer(line):
+                if m.start() > last_idx:
+                    parts.append({
+                        "type": "text",
+                        "text": {"content": line[last_idx:m.start()]}
+                    })
+                expr = m.group(1).strip()
+                expr = self.latex_to_notion(expr) 
+                parts.append({
+                    "type": "equation",
+                    "equation": {"expression": expr}
+                })
+                last_idx = m.end()
+
+            if last_idx < len(line):
+                parts.append({
+                    "type": "text",
+                    "text": {"content": line[last_idx:]}
+                })
+
+            if len(parts) == 1 and "equation" in parts[0]:
+                blocks.append({
+                    "object": "block",
+                    "type": "equation",
+                    "equation": {"expression": parts[0]["equation"]["expression"]}
+                })
+            elif parts:
+                blocks.append({
+                    "object": "block",
+                    "type": "paragraph",
+                    "paragraph": {"rich_text": parts}
+                })
+        return blocks
 
     def _extract_text_content(self, rich_text_list):
         if not rich_text_list:
             return ""
-        return "".join([rt.get("text", {}).get("content", "") for rt in rich_text_list if "text" in rt])
+        return "".join([rt.get("text", {}).get("content", "") for rt in rich_text_list if "text" in rt])    
