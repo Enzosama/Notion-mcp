@@ -23,6 +23,13 @@ from mcp.types import (
         EmbeddedResource,
     )
 
+# Added for SSE server support
+from starlette.applications import Starlette
+from starlette.routing import Route, Mount
+from starlette.requests import Request
+from starlette.background import BackgroundTask
+from mcp.server.sse import SseServerTransport
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("notion-mcp-server")
@@ -247,7 +254,6 @@ class NotionMCPServer:
                     )]
                     
                 elif name == "create_page":
-                    title = arguments.get("title")
                     parent_id = arguments.get("parent_id")
                     properties = arguments.get("properties", {})
                     content = arguments.get("content", "")
@@ -255,7 +261,7 @@ class NotionMCPServer:
                     # Create page properties
                     page_properties = {
                         "title": {
-                            "title": [{"text": {"content": title}}]
+                            "title": [{"text": {"content": arguments.get("title")}}]
                         }
                     }
                     
@@ -425,6 +431,55 @@ class NotionMCPServer:
             logger.error(f"Failed to initialize Notion client: {e}")
             raise
 
+# Initialize server instance and Notion client for SSE app
+_server_instance = NotionMCPServer()
+_notion_token = os.getenv("NOTION_TOKEN")
+if _notion_token:
+    _server_instance.initialize_notion_client(_notion_token)
+else:
+    logger.warning("NOTION_TOKEN not set. SSE endpoints will error until token is provided.")
+
+# Configure SSE transport and Starlette app
+_sse_transport = SseServerTransport("/sse/messages")
+
+async def _sse_endpoint(request: Request):
+    # Establish SSE connection and get read/write streams plus the response
+    result = await _sse_transport.connect_sse(request)
+    # Backwards compatibility with potential older SDK signatures
+    if isinstance(result, tuple) and len(result) == 3:
+        read_stream, write_stream, response = result
+    else:
+        # Fallback: newer SDK may return an object with attributes
+        read_stream = getattr(result, "read_stream", None)
+        write_stream = getattr(result, "write_stream", None)
+        response = getattr(result, "response", None)
+    if read_stream is None or write_stream is None or response is None:
+        # If we can't unpack properly, raise a clear error
+        raise RuntimeError("Failed to establish SSE connection with MCP transport")
+
+    init_options = InitializationOptions(
+        server_name="notion-mcp-server",
+        server_version="1.0.0",
+        capabilities=_server_instance.server.get_capabilities(
+            notification_options=NotificationOptions(
+                resources_changed=True,
+                tools_changed=True
+            ),
+            experimental_capabilities=None
+        )
+    )
+
+    # Run MCP server in background while returning streaming response
+    response.background = BackgroundTask(
+        _server_instance.server.run, read_stream, write_stream, init_options
+    )
+    return response
+
+app = Starlette(routes=[
+    Route("/sse", endpoint=_sse_endpoint, methods=["GET"]),
+    Mount("/sse/messages", app=_sse_transport.handle_post_message),
+])
+
 async def main():
     # Get Notion token from environment variable
     notion_token = os.getenv("NOTION_TOKEN")
@@ -436,7 +491,7 @@ async def main():
     server_instance = NotionMCPServer()
     server_instance.initialize_notion_client(notion_token)
     
-    # Run the server
+    # Run the server (STDIO fallback)
     from mcp.server.stdio import stdio_server
     async with stdio_server() as (read_stream, write_stream):
         await server_instance.server.run(
@@ -455,4 +510,10 @@ async def main():
             )
         )
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Default to running SSE HTTP server on port 8000
+    mode = os.getenv("MCP_MODE", "sse")
+    if mode == "sse":
+        import uvicorn
+        uvicorn.run("mcp_server:app", host="0.0.0.0", port=8000)
+    else:
+        asyncio.run(main())

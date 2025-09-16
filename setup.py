@@ -14,8 +14,8 @@ setup(
     python_requires=">=3.8",
     entry_points={
         "console_scripts": [
-            "notion-mcp-server=notion_mcp_server:main",
-            "notion-mcp-client=notion_mcp_client:main",
+            "notion-mcp-server=mcp_server:main",
+            "notion-mcp-client=main:main",
         ]
     },
 )
