@@ -15,6 +15,7 @@ from markdown_converter import MarkdownConverter
 from mcp.client.stdio import stdio_client
 from dotenv import load_dotenv
 load_dotenv()
+import mcp.client.sse as sse
 
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 NOTION_HEADERS = {
@@ -51,18 +52,32 @@ class NotionMCPClient:
         
     @asynccontextmanager
     async def connect(self):
-        """Connect to the Notion MCP server"""
-        server_params = StdioServerParameters(
-            command=sys.executable,
-            args=[self.server_path],
-            env={"NOTION_TOKEN": self.notion_token}
-        )
-        
-        async with stdio_client(server_params) as (read, write):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                self.session = session
-                yield self
+        """Connect to the Notion MCP server (auto-detect SSE vs STDIO)"""
+        if self.server_path.startswith("http://") or self.server_path.startswith("https://"):
+            # SSE MODE 
+            url = self.server_path.rstrip("/")
+            if url.endswith("/sse/messages"):
+                url = url.rsplit("/messages", 1)[0]
+
+            logger.info(f"Connecting via SSE to {url}")
+            async with sse.sse_client(url) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    self.session = session
+                    yield self
+        else:
+            # STDIO MODE
+            logger.info(f"Starting server process via stdio: {self.server_path}")
+            server_params = StdioServerParameters(
+                command=sys.executable,
+                args=[self.server_path],
+                env={"NOTION_TOKEN": self.notion_token}
+            )
+            async with stdio_client(server_params) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    self.session = session
+                    yield self
     
     async def list_resources(self):
         try:

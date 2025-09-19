@@ -8,3 +8,4 @@ starlette>=0.38.2
 uvicorn>=0.30.5
 langgraph>=0.2.34
 google-generativeai>=0.7.2
+sse-starlette
